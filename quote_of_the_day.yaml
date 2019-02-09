@@ -1,0 +1,157 @@
+#Persistent volumbe object relying on local nfs server
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: scrapper-pv
+  labels:
+    volume: scrapper-pv
+spec:
+  accessModes:
+  - ReadWriteMany
+  capacity:
+    storage: 1Gi
+  nfs:
+    server: 192.168.122.20
+    path: "/nfsshare"
+---
+#Persistent volume claim using cluster local storage
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: scrapper-pvc
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+  selector:
+    matchLabels:
+      volume: scrapper-pv
+---
+ #this pod is in use only for private docker repo access
+ #ensure to add secret object with repo access
+ #https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hub-key
+spec:
+  containers:
+    - name: hub-key
+      image: hasanin/dojo:latest
+      imagePullPolicy: Always
+      command: [ "echo", "SUCCESS" ]
+  imagePullSecrets:
+    - name: myregistrykey
+---
+#kubernetes cron job to randomize the daily quote
+
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: scrapper-cron
+  labels:
+    app: scrapper
+spec:
+  #startingDeadlineSeconds: 86460
+  schedule: 0 0 * * *
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          volumes:
+          - name: web-index
+            persistentVolumeClaim:
+              claimName: scrapper-pvc
+          restartPolicy: OnFailure
+          containers:
+          - name: getquote
+            image: hasanin/dojo
+            imagePullPolicy: Always
+            volumeMounts:
+            - name: web-index
+              mountPath: /Web
+# Add this only if the docker image is hosted in a private repo
+          imagePullSecrets:
+          - name: regcred
+---
+#a workaround by running a 1 time job for first run
+#instead of waiting till 12:00 am.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: oneshot
+  labels:
+    app: scrapper
+spec:
+  template:
+    metadata:
+      labels:
+        app: scrapper
+    spec:
+      imagePullSecrets:
+      - name: regcred
+      volumes:
+      - name: web-index
+        persistentVolumeClaim:
+          claimName: scrapper-pvc
+      restartPolicy: OnFailure
+      containers:
+      - name: getquote
+        image: hasanin/dojo
+        imagePullPolicy: Always
+        volumeMounts:
+        - name: web-index
+          mountPath: /Web
+---
+#nginx deployment uses index.html from persistentVolume
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+        app: dojo-front
+  template:
+    metadata:
+      labels:
+        app: dojo-front
+    spec:
+      volumes:
+      - name: web-index
+        persistentVolumeClaim:
+          claimName: scrapper-pvc
+      containers:
+      - name: webquote
+        image: nginx
+        volumeMounts:
+        - name: web-index
+          mountPath: /usr/share/nginx/html
+      restartPolicy: Always
+---
+#Exposing nginx deployment using nodeprot type for my local cluster
+#spec.type should be changed to "LoadBalancer" when running over
+#cloud provider loadbalancer service
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: dojo-front
+spec:
+  selector:
+    app: dojo-front
+  type: NodePort
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
