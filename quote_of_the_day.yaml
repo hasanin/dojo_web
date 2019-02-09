@@ -1,21 +1,15 @@
-#Persistent volumbe object relying on local nfs server
-
-apiVersion: v1
-kind: PersistentVolume
+# storage class object to provision from aws ebs
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
 metadata:
-  name: scrapper-pv
-  labels:
-    volume: scrapper-pv
-spec:
-  accessModes:
-  - ReadWriteMany
-  capacity:
-    storage: 1Gi
-  nfs:
-    server: 192.168.122.20
-    path: "/nfsshare"
+  name: slow
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: io1
+  iopsPerGB: "10"
+  fsType: ext4
 ---
-#Persistent volume claim using cluster local storage
+#Persistent volume claim using aws ebs
 
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -24,12 +18,11 @@ metadata:
 spec:
   accessModes:
   - ReadWriteMany
+  volumeMode: Filesystem
   resources:
     requests:
-      storage: 1Gi
-  selector:
-    matchLabels:
-      volume: scrapper-pv
+      storage: 4Gi
+  storageClassName: slow
 ---
  #this pod is in use only for private docker repo access
  #ensure to add secret object with repo access
@@ -150,7 +143,7 @@ metadata:
 spec:
   selector:
     app: dojo-front
-  type: NodePort
+  type: LoadBalancer
   ports:
   - protocol: TCP
     port: 80
